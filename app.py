@@ -8,20 +8,18 @@ load_dotenv()
 
 app = Flask(__name__)
 
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
-IG_USER_ID = os.getenv("IG_USER_ID")
-
 sent_dmrecords = set()  # 防止重複發送（同一則留言只發一次）
 
 
 def send_dm(user_id: str, message: str):
     """發送私訊給指定用戶"""
-    url = f"https://graph.instagram.com/v21.0/{IG_USER_ID}/messages"
+    access_token = os.getenv("ACCESS_TOKEN")
+    ig_user_id = os.getenv("IG_USER_ID")
+    url = f"https://graph.instagram.com/v21.0/{ig_user_id}/messages"
     payload = {
         "recipient": {"id": user_id},
         "message": {"text": message},
-        "access_token": ACCESS_TOKEN,
+        "access_token": access_token,
     }
     response = requests.post(url, json=payload)
     if response.status_code == 200:
@@ -31,14 +29,28 @@ def send_dm(user_id: str, message: str):
     return response
 
 
+@app.route("/health", methods=["GET"])
+def health():
+    """健康檢查"""
+    return jsonify({
+        "status": "ok",
+        "verify_token_set": bool(os.getenv("VERIFY_TOKEN")),
+        "access_token_set": bool(os.getenv("ACCESS_TOKEN")),
+        "ig_user_id_set": bool(os.getenv("IG_USER_ID")),
+    }), 200
+
+
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
     """Meta Webhook 驗證"""
+    verify_token = os.getenv("VERIFY_TOKEN")
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    if mode == "subscribe" and token == VERIFY_TOKEN:
+    print(f"[驗證] mode={mode}, token={token}, VERIFY_TOKEN={verify_token}")
+
+    if mode == "subscribe" and token == verify_token:
         print("[OK] Webhook 驗證成功")
         return challenge, 200
     else:
