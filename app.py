@@ -153,7 +153,7 @@ def health():
         "verify_token_preview": vt[:6] if vt else "EMPTY",
         "access_token_set": bool(access_token),
         "ig_user_id_set": bool(ig_user_id),
-        "env_keys": [k for k in os.environ.keys() if not k.startswith("RAILWAY_")],
+        "env_keys": sorted(os.environ.keys()),
     }), 200
 
 
