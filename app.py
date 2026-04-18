@@ -154,6 +154,10 @@ def health():
         "access_token_set": bool(access_token),
         "ig_user_id_set": bool(ig_user_id),
         "env_keys": sorted(os.environ.keys()),
+        "railway_project": os.getenv("RAILWAY_PROJECT_NAME"),
+        "railway_service": os.getenv("RAILWAY_SERVICE_NAME"),
+        "railway_env": os.getenv("RAILWAY_ENVIRONMENT_NAME"),
+        "railway_public_domain": os.getenv("RAILWAY_PUBLIC_DOMAIN"),
     }), 200
 
 
