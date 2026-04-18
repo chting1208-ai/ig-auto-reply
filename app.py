@@ -5,10 +5,14 @@ import time
 import queue
 import requests
 from flask import Flask, request, jsonify
-from dotenv import load_dotenv
 from keywords import get_content_by_keyword
 
-load_dotenv()
+# load_dotenv() 僅本地開發使用，Railway 直接注入環境變數
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 app = Flask(__name__)
 
@@ -142,11 +146,14 @@ def process_comment(comment_id: str, commenter_id: str, content: dict):
 @app.route("/health", methods=["GET"])
 def health():
     access_token, ig_user_id = get_tokens()
+    vt = os.getenv("VERIFY_TOKEN", "")
     return jsonify({
         "status": "ok",
-        "verify_token_set": bool(os.getenv("VERIFY_TOKEN")),
+        "verify_token_set": bool(vt),
+        "verify_token_preview": vt[:6] if vt else "EMPTY",
         "access_token_set": bool(access_token),
         "ig_user_id_set": bool(ig_user_id),
+        "env_keys": [k for k in os.environ.keys() if not k.startswith("RAILWAY_")],
     }), 200
 
 
