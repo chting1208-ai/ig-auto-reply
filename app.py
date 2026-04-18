@@ -1,42 +1,152 @@
 import os
+import random
+import threading
+import time
+import queue
 import requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from keywords import get_reply
+from keywords import get_content_by_keyword
 
 load_dotenv()
 
 app = Flask(__name__)
 
-sent_dmrecords = set()  # 防止重複發送（同一則留言只發一次）
+# 追蹤每個用戶的狀態
+user_states = {}
+
+# 防止重複處理同一則留言
+processed_comments = set()
+
+# 私訊排隊系統（超過速率限制時，任務排隊等待重試）
+dm_queue = queue.Queue()
+
+def dm_worker():
+    """背景工作：從佇列取出私訊任務，失敗時自動排隊重試"""
+    while True:
+        task = dm_queue.get()
+        func = task["func"]
+        args = task["args"]
+        retries = task.get("retries", 0)
+
+        try:
+            result = func(*args)
+            # 如果回傳 429（速率限制）或其他錯誤，等待後重試
+            if result and hasattr(result, 'status_code') and result.status_code == 429:
+                raise Exception("Rate limit hit")
+        except Exception as e:
+            if retries < 5:
+                wait_time = 60 * (retries + 1)  # 1分鐘、2分鐘...依序遞增
+                print(f"[RETRY] {func.__name__} 失敗，{wait_time}秒後重試（第{retries+1}次）: {e}")
+                time.sleep(wait_time)
+                dm_queue.put({"func": func, "args": args, "retries": retries + 1})
+            else:
+                print(f"[FAIL] {func.__name__} 重試5次仍失敗，放棄: {e}")
+        finally:
+            dm_queue.task_done()
+
+# 啟動背景 worker
+threading.Thread(target=dm_worker, daemon=True).start()
+
+def queue_dm(func, *args):
+    """把私訊任務加入排隊"""
+    dm_queue.put({"func": func, "args": args, "retries": 0})
 
 
-def send_dm(user_id: str, message: str):
-    """發送私訊給指定用戶"""
-    access_token = os.getenv("ACCESS_TOKEN")
-    ig_user_id = os.getenv("IG_USER_ID")
+def get_tokens():
+    return os.getenv("ACCESS_TOKEN"), os.getenv("IG_USER_ID")
+
+
+def send_message(user_id: str, text: str):
+    """發送私訊給指定用戶（用於回覆 OK 後的懶人包）"""
+    access_token, ig_user_id = get_tokens()
     url = f"https://graph.instagram.com/v21.0/{ig_user_id}/messages"
     payload = {
         "recipient": {"id": user_id},
-        "message": {"text": message},
+        "message": {"text": text},
         "access_token": access_token,
     }
-    response = requests.post(url, json=payload)
-    if response.status_code == 200:
-        print(f"[OK] 已發送私訊給 {user_id}")
-    else:
-        print(f"[ERROR] 發送失敗: {response.status_code} {response.text}")
-    return response
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            print(f"[OK] 已發送私訊給 {user_id}")
+        else:
+            print(f"[ERROR] 私訊發送失敗: {response.status_code} {response.text}")
+    except Exception as e:
+        print(f"[ERROR] 私訊例外: {e}")
+
+
+def send_private_reply(comment_id: str, text: str):
+    """透過留言 ID 發送私訊（Private Reply，可突破 24 小時限制）"""
+    access_token, ig_user_id = get_tokens()
+    url = f"https://graph.instagram.com/v21.0/{ig_user_id}/messages"
+    payload = {
+        "recipient": {"comment_id": comment_id},
+        "message": {"text": text},
+        "access_token": access_token,
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            print(f"[OK] 已發送 Private Reply 給留言 {comment_id}")
+        else:
+            print(f"[ERROR] Private Reply 失敗: {response.status_code} {response.text}")
+    except Exception as e:
+        print(f"[ERROR] Private Reply 例外: {e}")
+
+
+# 留言回覆的隨機文字
+COMMENT_REPLIES = [
+    "分享囉😻",
+    "已私訊給你🙋🏻‍♀️",
+    "快去收收訊息📩",
+    "追蹤我💕 訊息才不會漏掉唷！",
+    "傳給你囉～！請留意陌生訊息☺️",
+    "懶人包飛過去惹✈️",
+]
+
+def reply_to_comment(comment_id: str):
+    """自動回覆貼文留言"""
+    access_token, _ = get_tokens()
+    url = f"https://graph.instagram.com/v21.0/{comment_id}/replies"
+    reply_text = random.choice(COMMENT_REPLIES)
+    payload = {
+        "message": reply_text,
+        "access_token": access_token,
+    }
+    try:
+        response = requests.post(url, data=payload, timeout=10)
+        if response.status_code == 200:
+            print(f"[OK] 已回覆留言：{reply_text}")
+        else:
+            print(f"[ERROR] 回覆留言失敗: {response.status_code} {response.text}")
+    except Exception as e:
+        print(f"[ERROR] 回覆留言例外: {e}")
+
+
+def process_comment(comment_id: str, commenter_id: str, content: dict):
+    """背景處理：同時回覆留言 + 發送私訊（各自獨立，互不影響）"""
+    # 留言回覆：直接執行（速度快，優先完成）
+    reply_to_comment(comment_id)
+
+    # 私訊：走排隊系統（確保超量時也能補發）
+    queue_dm(send_private_reply, comment_id, content["initial_message"])
+
+    # 記錄用戶狀態（等待回覆 OK）
+    user_states[commenter_id] = {
+        "step": "waiting_ok",
+        "content": content,
+    }
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    """健康檢查"""
+    access_token, ig_user_id = get_tokens()
     return jsonify({
         "status": "ok",
         "verify_token_set": bool(os.getenv("VERIFY_TOKEN")),
-        "access_token_set": bool(os.getenv("ACCESS_TOKEN")),
-        "ig_user_id_set": bool(os.getenv("IG_USER_ID")),
+        "access_token_set": bool(access_token),
+        "ig_user_id_set": bool(ig_user_id),
     }), 200
 
 
@@ -48,53 +158,85 @@ def verify_webhook():
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    print(f"[驗證] mode={mode}, token={token}, VERIFY_TOKEN={verify_token}")
-
     if mode == "subscribe" and token == verify_token:
         print("[OK] Webhook 驗證成功")
         return challenge, 200
-    else:
-        print("[ERROR] Webhook 驗證失敗")
-        return "Forbidden", 403
+    print("[ERROR] Webhook 驗證失敗")
+    return "Forbidden", 403
 
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
-    """接收 Instagram 留言通知"""
+    """接收 Instagram 通知 — 立即回應 Meta，背景處理"""
     data = request.get_json()
     print(f"[收到] {data}")
 
-    try:
-        entries = data.get("entry", [])
-        for entry in entries:
-            for change in entry.get("changes", []):
-                if change.get("field") != "comments":
-                    continue
-
-                value = change.get("value", {})
-                comment_id = value.get("id")
-                comment_text = value.get("text", "")
-                commenter_id = value.get("from", {}).get("id")
-
-                if not commenter_id or not comment_id:
-                    continue
-
-                # 防止重複處理同一則留言
-                if comment_id in sent_dmrecords:
-                    continue
-
-                reply_message = get_reply(comment_text)
-                if reply_message:
-                    sent_dmrecords.add(comment_id)
-                    send_dm(commenter_id, reply_message)
-                    print(f"[觸發] 關鍵字命中，留言：{comment_text!r}")
-                else:
-                    print(f"[略過] 無關鍵字，留言：{comment_text!r}")
-
-    except Exception as e:
-        print(f"[ERROR] 處理失敗: {e}")
+    # 立刻回應 Meta（避免超時），背景處理實際邏輯
+    threading.Thread(target=process_webhook, args=(data,)).start()
 
     return jsonify({"status": "ok"}), 200
+
+
+def process_webhook(data: dict):
+    """背景處理 Webhook 內容"""
+    try:
+        for entry in data.get("entry", []):
+
+            # ── 私訊觸發 ──
+            for msg_event in entry.get("messaging", []):
+                handle_message(msg_event)
+
+            # ── 留言觸發 ──
+            for change in entry.get("changes", []):
+                if change.get("field") == "comments":
+                    handle_comment(change.get("value", {}))
+
+    except Exception as e:
+        print(f"[ERROR] 背景處理失敗: {e}")
+
+
+def handle_comment(value: dict):
+    """處理留言事件"""
+    comment_id = value.get("id")
+    comment_text = value.get("text", "")
+    commenter_id = value.get("from", {}).get("id")
+
+    if not commenter_id or not comment_id:
+        return
+    if comment_id in processed_comments:
+        return
+
+    content = get_content_by_keyword(comment_text)
+    if not content:
+        print(f"[略過] 無關鍵字，留言：{comment_text!r}")
+        return
+
+    processed_comments.add(comment_id)
+    print(f"[觸發] 關鍵字命中，留言：{comment_text!r}")
+
+    # 背景同時執行：回覆留言 + 發私訊
+    threading.Thread(target=process_comment, args=(comment_id, commenter_id, content)).start()
+
+
+def handle_message(value: dict):
+    """處理私訊事件"""
+    sender_id = value.get("sender", {}).get("id")
+    _, ig_user_id = get_tokens()
+
+    # 忽略自己發出的訊息
+    if sender_id == ig_user_id:
+        return
+
+    message = value.get("message", {})
+    text = message.get("text", "").strip().lower()
+
+    if text in ["ok", "okay", "好", "好的", "已追蹤", "追蹤了", "ok!"]:
+        state = user_states.get(sender_id)
+        if state and state["step"] == "waiting_ok":
+            print(f"[OK] {sender_id} 回覆了 OK，發送懶人包")
+            content = state["content"]
+            del user_states[sender_id]
+            queue_dm(send_message, sender_id, content["content"])
 
 
 if __name__ == "__main__":
