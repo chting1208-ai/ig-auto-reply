@@ -27,6 +27,11 @@ KEYWORD_CONTENT = {
         "initial_message": "嗨！想領取【養老懶人包】嗎？\n\n請先完成以下步驟：\n✅ 追蹤金融女子薇薇安的帳號\n✅ 追蹤後回覆「OK」\n\n完成後就會自動發送給你🙋🏻‍♀️",
         "content": "已收到您的留言💕\n以房養老懶人包來囉🏠\nhttps://gemini.google.com/share/d46a5d565128",
     },
+    "貸款": {
+        "name": "銀行貸款懶人包",
+        "initial_message": "嗨！想了解銀行貸款的細節嗎？\n\n請先完成以下步驟：\n✅ 追蹤金融女子薇薇安的帳號\n✅ 追蹤後回覆「OK」\n\n完成後就會自動發送給你🙋🏻‍♀️",
+        "content": "收到你的留言囉！\n「銀行貸款」細節分享給你👇🏻\nhttps://loan.vivianmoneylife.com\n\n有更多想詢問的可以加入官方line\n🔗https://lin.ee/P5oQkHf\n\n不定時會有金融、房地產相關資訊的分享\n歡迎交流💕",
+    },
     # ↓ 在這裡繼續新增更多關鍵字 ↓
 }
 
